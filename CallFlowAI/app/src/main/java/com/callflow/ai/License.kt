@@ -10,9 +10,9 @@ import java.util.UUID
 
 object Config {
     /** Keep false until your server is online. Then set your address below and change this to true. */
-    const val LICENSE_ENABLED = false
+    const val LICENSE_ENABLED = true
     /** Must start with https:// */
-    const val SERVER_URL = "https://your-domain.com/api/subscription"
+    const val SERVER_URL = "https://callflowserver.onrender.com/api/subscription"
     /** The app locks this many days after the last successful check. */
     const val OFFLINE_DAYS = 7
 }
