@@ -1,0 +1,11 @@
+services:
+  subscription:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - ADMIN_KEY=${ADMIN_KEY}
+      - DATA_FILE=/data/subscriptions.json
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CallFlow AI Admin</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0a0a0a;color:#f2f5e8;font:16px/1.5 system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{color:#c6f432;font-size:22px}
+.card{background:#1a1f14;border:1px solid #3a4a1a;border-radius:14px;padding:14px;margin:12px 0}
+input{width:100%;box-sizing:border-box;padding:11px;border-radius:10px;border:1px solid #5e6b3a;background:#0a0a0a;color:inherit;font:inherit;margin:6px 0}
+button{padding:10px 14px;border:0;border-radius:10px;background:#c6f432;color:#0a0a0a;font:600 15px system-ui;cursor:pointer;margin:4px 6px 0 0}
+button.g{background:#232a18;color:#f2f5e8}button.r{background:#ff6b5e}
+.code{font:700 20px ui-monospace,monospace;letter-spacing:1px;color:#ffd60a}
+.badge{padding:2px 10px;border-radius:20px;font-size:13px;font-weight:700}
+.run{background:#2ecc71;color:#0a0a0a}.clo{background:#ff6b5e;color:#0a0a0a}
+.mute{color:#93a88c;font-size:14px}
+footer{text-align:center;color:#8a9a5b;font-size:12px;margin:24px 0}
+</style></head><body><main id="app"></main>
+<script>
+let key = sessionStorage.getItem('k') || '';
+const app = document.getElementById('app');
+const h = (tag, props, ...kids) => { const e = document.createElement(tag); Object.assign(e, props || {}); kids.flat().forEach(k => e.append(k)); return e; };
+async function api(body) {
+  const r = await fetch('/api/subscription', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-key': key }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { sessionStorage.removeItem('k'); key = ''; login('Wrong admin key'); throw new Error('auth'); }
+  if (!r.ok) { alert(j.error || j.message || 'Error'); throw new Error('fail'); }
+  return j;
+}
+function login(msg) {
+  const inp = h('input', { type: 'password', placeholder: 'Admin key' });
+  app.replaceChildren(h('h1', { textContent: 'CallFlow AI Admin' }), h('div', { className: 'card' }, inp,
+    h('button', { textContent: 'Open', onclick: () => { key = inp.value; sessionStorage.setItem('k', key); list(); } }),
+    h('div', { className: 'mute', textContent: msg || '' })));
+}
+async function list() {
+  let data;
+  try { data = await api({ action: 'list' }); } catch (e) { return; }
+  const label = h('input', { placeholder: 'User name or phone (only for you)' });
+  const msg = h('input', { placeholder: 'Message for this user (optional)' });
+  const create = h('div', { className: 'card' }, h('b', { textContent: 'New user code' }), label, msg,
+    h('button', { textContent: 'Create code', onclick: async () => { await api({ action: 'create', label: label.value, message: msg.value }); list(); } }));
+  const cards = data.items.map(it => {
+    const m = h('input', { value: it.message || '', placeholder: 'Message shown in the app' });
+    const run = it.status === 'running';
+    const act = f => async () => { await api(typeof f === 'function' ? f() : f); list(); };
+    return h('div', { className: 'card' },
+      h('div', { className: 'code', textContent: it.code }),
+      h('span', { className: 'badge ' + (run ? 'run' : 'clo'), textContent: run ? 'RUNNING' : 'CLOSED' }),
+      h('div', { className: 'mute', textContent: (it.label || 'No name') + ' · ' + (it.device ? 'phone linked' : 'not used yet') + (it.lastCheck ? ' · last seen ' + new Date(it.lastCheck).toLocaleString() : '') }),
+      m,
+      h('button', { textContent: 'Save message', onclick: act(() => ({ action: 'update', code: it.code, message: m.value })) }),
+      h('button', { className: run ? 'r' : '', textContent: run ? 'Close subscription' : 'Start subscription', onclick: act({ action: 'update', code: it.code, status: run ? 'closed' : 'running' }) }),
+      h('button', { className: 'g', textContent: 'Reset phone', onclick: act({ action: 'resetDevice', code: it.code }) }),
+      h('button', { className: 'g', textContent: 'Copy code', onclick: () => navigator.clipboard && navigator.clipboard.writeText(it.code) }),
+      h('button', { className: 'g', textContent: 'Delete', onclick: () => confirm('Delete this code?') && act({ action: 'delete', code: it.code })() }));
+  });
+  app.replaceChildren(h('h1', { textContent: 'CallFlow AI Admin' }), create, ...cards, h('footer', { textContent: '© 2026 CallFlow AI · All rights reserved by Ajay Sah' }));
+}
+key ? list() : login('');
+</script></body></html>
