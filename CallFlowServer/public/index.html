@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CallFlow AI Dashboard</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0a0a0a;color:#f2f5e8;font:16px/1.5 system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:14px}
+h1{color:#c6f432;font-size:22px;margin:6px 0}h2{font-size:17px;margin:4px 0;color:#c6f432}
+.card{background:#1a1f14;border:1px solid #3a4a1a;border-radius:14px;padding:14px;margin:12px 0}
+input,select{width:100%;box-sizing:border-box;padding:11px;border-radius:10px;border:1px solid #5e6b3a;background:#0a0a0a;color:inherit;font:inherit;margin:5px 0}
+button{padding:9px 13px;border:0;border-radius:10px;background:#c6f432;color:#0a0a0a;font:600 14px system-ui;cursor:pointer;margin:5px 6px 0 0}
+button.g{background:#232a18;color:#f2f5e8}button.r{background:#ff6b5e}button.y{background:#ffd60a}
+.code{font:700 15px ui-monospace,monospace;color:#ffd60a;letter-spacing:.5px}
+.b{padding:2px 9px;border-radius:20px;font-size:12px;font-weight:700;margin-right:4px;display:inline-block;color:#0a0a0a;background:#93a88c}
+.ok{background:#2ecc71}.bad{background:#ff6b5e}.wait{background:#ffd60a}
+.mute{color:#93a88c;font-size:14px}.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:130px}
+.stat{background:#232a18;border-radius:10px;padding:8px 12px;flex:1;min-width:100px}.stat b{display:block;font-size:20px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 6px;border-bottom:1px solid #2a3a1a;text-align:left;vertical-align:top}
+.tabs button{background:#232a18;color:#f2f5e8}.tabs button.on{background:#c6f432;color:#0a0a0a}
+footer{text-align:center;color:#8a9a5b;font-size:12px;margin:24px 0}
+</style></head><body><main id="app"></main>
+<script>
+let tok = sessionStorage.getItem('t') || '', role = sessionStorage.getItem('r') || '';
+const app = document.getElementById('app');
+const h = (tag, props, ...kids) => { const e = document.createElement(tag); Object.assign(e, props || {}); kids.flat().forEach(k => e.append(k)); return e; };
+const txt = (t, cls) => h('div', { className: cls || '', textContent: t });
+const btn = (t, f, cls) => h('button', { textContent: t, className: cls || '', onclick: f });
+const date = s => s ? new Date(s).toLocaleString() : '-';
+async function api(action, body, raw) {
+  const r = await fetch('/api/subscription', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: JSON.stringify({ action, ...(body || {}) }) });
+  if (raw && r.ok) return r;
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && tok) { logout(); throw new Error('auth'); }
+  if (!r.ok) { alert(j.error || 'Error'); throw new Error('fail'); }
+  return j;
+}
+function logout() { tok = ''; role = ''; sessionStorage.clear(); login(); }
+async function download(type, format, extra) {
+  const r = await api('report', { type, format, ...(extra || {}) }, true);
+  const name = ((r.headers.get('content-disposition') || '').match(/filename="(.+)"/) || [])[1] || 'report.' + format;
+  const a = h('a', { href: URL.createObjectURL(await r.blob()), download: name });
+  document.body.append(a); a.click(); a.remove();
+}
+const exportBar = extra => h('div', {}, ...[['calls', 'Calling history'], ['followups', 'Follow-ups'], ['performance', 'Performance'], ['team', 'Team summary']].map(([t, n]) =>
+  h('span', {}, btn(n + ' CSV', () => download(t, 'csv', extra), 'g'), btn('XLSX', () => download(t, 'xlsx', extra), 'g'))));
+const footer = () => h('footer', { textContent: '© 2026 CallFlow AI · All rights reserved by Ajay Sah' });
+const head = (title, back) => h('div', { className: 'row' }, h('h1', { textContent: title }), h('div', { style: 'text-align:right;flex:0 0 auto' }, back ? btn('Back', back, 'g') : '', btn('Log out', logout, 'g')));
+
+function login() {
+  const key = h('input', { type: 'password', placeholder: 'Admin key' });
+  const code = h('input', { placeholder: 'Team leader access code (TL-XXXX-XXXX)' });
+  const go = async (action, body, r) => { const j = await api(action, body); tok = j.token; role = r; sessionStorage.setItem('t', tok); sessionStorage.setItem('r', role); start(); };
+  app.replaceChildren(h('h1', { textContent: 'CallFlow AI' }),
+    h('div', { className: 'card' }, h('h2', { textContent: 'Admin' }), key, btn('Open admin', () => go('adminLogin', { key: key.value }, 'admin'))),
+    h('div', { className: 'card' }, h('h2', { textContent: 'Team leader' }), code, btn('Open my team', () => go('leaderLogin', { accessCode: code.value }, 'leader'))), footer());
+}
+const start = () => (role === 'admin' ? adminHome() : role === 'leader' ? teamScreen(null) : login());
+
+/* ---------- admin: team leaders ---------- */
+async function adminHome(tab) {
+  const { leaders } = await api('listLeaders');
+  const f = { name: h('input', { placeholder: 'Team leader name' }), limit: h('input', { type: 'number', placeholder: 'User limit', min: 0 }), plan: h('input', { placeholder: 'Plan name (optional)' }), days: h('input', { type: 'number', placeholder: 'Valid for days (empty = no expiry)' }) };
+  const create = h('div', { className: 'card' }, h('h2', { textContent: 'New team leader subscription' }), f.name, h('div', { className: 'row' }, f.limit, f.days), f.plan,
+    btn('Create', async () => { await api('createLeader', { name: f.name.value, userLimit: f.limit.value, plan: f.plan.value, days: f.days.value }); adminHome(); }));
+  const cards = leaders.map(l => {
+    const act = (action, body, ask) => async () => { if (ask && !confirm(ask)) return; await api(action, { leaderId: l.id, ...body }); adminHome(); };
+    const cls = { active: 'ok', suspended: 'wait', expired: 'bad', cancelled: 'bad' }[l.state];
+    return h('div', { className: 'card' }, h('div', {}, h('b', { textContent: l.name + ' ' }), h('span', { className: 'b ' + cls, textContent: l.state.toUpperCase() }), h('span', { className: 'b', textContent: l.plan })),
+      txt(`Users ${l.used} / ${l.userLimit} · Pending phones ${l.pendingDevices} · Expires ${l.expiresAt ? new Date(l.expiresAt).toLocaleDateString() : 'never'}`, 'mute'),
+      h('div', {}, 'Access code: ', h('span', { className: 'code', textContent: l.accessCode })), h('div', {}, 'Invite code: ', h('span', { className: 'code', textContent: l.inviteCode })),
+      l.message ? txt('Message: ' + l.message, 'mute') : '',
+      btn('Open team', () => teamScreen(l)),
+      btn('Change user limit', async () => { const v = prompt('New user limit for ' + l.name, l.userLimit); if (v !== null) { await api('updateLeader', { leaderId: l.id, userLimit: v }); adminHome(); } }, 'y'),
+      btn('Renew 30 days', act('renewLeader', { days: 30 })), btn('Renew 365 days', act('renewLeader', { days: 365 })),
+      l.status === 'active' ? btn('Suspend', act('updateLeader', { status: 'suspended' }), 'g') : btn('Activate', act('updateLeader', { status: 'active' })),
+      l.status !== 'cancelled' ? btn('Cancel subscription', act('updateLeader', { status: 'cancelled' }, 'Cancel this subscription? The team loses access.'), 'r') : '',
+      btn('Set expiry', async () => { const v = prompt('Expiry date (YYYY-MM-DD). Empty = never.', (l.expiresAt || '').slice(0, 10)); if (v !== null) { await api('updateLeader', { leaderId: l.id, expiresAt: v }); adminHome(); } }, 'g'),
+      btn('Message', async () => { const v = prompt('Message shown to the team (empty = none)', l.message || ''); if (v !== null) { await api('updateLeader', { leaderId: l.id, message: v }); adminHome(); } }, 'g'),
+      btn('New access code', act('newCode', { which: 'access' }, 'Make a new access code? The old one stops working.'), 'g'),
+      btn('New invite code', act('newCode', { which: 'invite' }, 'Make a new invite code? The old one stops working.'), 'g'),
+      btn('Delete team', act('deleteLeader', { confirm: true }, 'Delete this team leader, ALL their users and call data? This cannot be undone.'), 'r'));
+  });
+  app.replaceChildren(head('CallFlow AI Admin'),
+    h('div', { className: 'tabs' }, btn('Team leaders', () => adminHome(), 'on'), btn('All users', () => teamScreen(null, true))),
+    create, ...cards, h('div', { className: 'card' }, h('h2', { textContent: 'Reports (all teams)' }), exportBar({})), footer());
+}
+
+/* ---------- team / users (leader sees own team, admin sees any) ---------- */
+async function teamScreen(l, allUsers) {
+  const isAdmin = role === 'admin';
+  let info = null, users;
+  if (isAdmin) users = (await api('listUsers', { leaderId: allUsers ? '*' : l.id })).users;
+  else { info = await api('teamInfo'); users = (await api('teamUsers')).users; l = info.leader; }
+  const reload = () => teamScreen(l, allUsers);
+  const extra = isAdmin && !allUsers ? { leaderId: l.id } : {};
+  const nm = h('input', { placeholder: 'New user name' });
+  const lines = [];
+  if (l) {
+    lines.push(h('div', { className: 'card' }, h('div', {}, h('b', { textContent: l.name + ' ' }), h('span', { className: 'b ' + (l.state === 'active' ? 'ok' : 'bad'), textContent: l.state.toUpperCase() })),
+      txt(`Users ${l.used} / ${l.userLimit} · Plan ${l.plan} · Expires ${l.expiresAt ? new Date(l.expiresAt).toLocaleDateString() : 'never'}`, 'mute'),
+      l.state !== 'active' ? txt('Subscription is not active: the team is locked and this dashboard is read-only.', 'mute') : '',
+      h('div', {}, 'Invite code for new users: ', h('span', { className: 'code', textContent: l.inviteCode })),
+      info ? h('div', { className: 'row' }, ...[['Total calls', info.summary.totalCalls], ['Calls today', info.summary.today], ['Last 7 days', info.summary.last7], ['Follow-ups pending', info.summary.pendingFollowUps]].map(([k, v]) => h('div', { className: 'stat' }, h('b', { textContent: v }), txt(k, 'mute'))) ) : ''));
+  }
+  const addCard = h('div', { className: 'card' }, h('h2', { textContent: 'Add a user' }), nm,
+    btn('Create user code', async () => { const r = await api('addUser', { name: nm.value, ...(isAdmin && !allUsers ? { leaderId: l.id } : {}) }); alert('User code: ' + r.user.code + '\nGive it to the user. Then approve their phone here.'); reload(); }));
+  const cards = users.map(u => {
+    const go = (action, body, ask) => async () => { if (ask && !confirm(ask)) return; await api(action, { userId: u.id, ...body }); reload(); };
+    const dcls = { approved: 'ok', pending: 'wait', revoked: 'bad', none: '' }[u.device.status];
+    return h('div', { className: 'card' }, h('div', {}, h('b', { textContent: u.name + ' ' }), h('span', { className: 'b ' + (u.status === 'active' ? 'ok' : 'bad'), textContent: u.status === 'active' ? 'ACCESS' : 'REVOKED' }), h('span', { className: 'b ' + dcls, textContent: 'PHONE ' + u.device.status.toUpperCase() })),
+      h('div', {}, h('span', { className: 'code', textContent: u.code }), allUsers && u.leaderName ? txt('  Team: ' + u.leaderName, 'mute') : ''),
+      txt(`Calls ${u.stats.totalCalls} · Today ${u.stats.today} · 7 days ${u.stats.last7} · Follow-ups pending ${u.stats.pendingFollowUps} · Last call ${date(u.stats.lastCall)}`, 'mute'),
+      u.device.has ? txt(`Phone: ${u.device.name || 'unknown'} · last seen ${date(u.device.lastSeen)}`, 'mute') : '',
+      btn('Dashboard', () => userScreen(u, reload)),
+      u.device.status !== 'approved' && u.device.has ? btn('Approve phone', go('setDevice', { device: 'approve' }), 'y') : '',
+      u.device.status === 'approved' ? btn('Block phone', go('setDevice', { device: 'revoke' }, 'Block this phone?'), 'g') : '',
+      u.device.has ? btn('Reset phone', go('setDevice', { device: 'reset' }, 'Let this user register a new phone?'), 'g') : '',
+      u.status === 'active' ? btn('Revoke access', go('setAccess', { access: 'revoked' }, 'Revoke access for ' + u.name + '?'), 'g') : btn('Grant access', go('setAccess', { access: 'active' })),
+      btn('Remove', go('removeUser', {}, 'Remove ' + u.name + ' and all their call data?'), 'r'));
+  });
+  app.replaceChildren(head(allUsers ? 'All users' : isAdmin ? l.name : 'My team', isAdmin ? () => adminHome() : null), ...lines, addCard, ...cards,
+    users.length ? '' : txt('No users yet.', 'mute'), h('div', { className: 'card' }, h('h2', { textContent: 'Reports' }), exportBar(extra)), footer());
+}
+
+async function userScreen(u, back) {
+  const d = await api('userDashboard', { userId: u.id });
+  const s = d.stats;
+  app.replaceChildren(head(d.user.name, back),
+    h('div', { className: 'card' }, h('div', { className: 'row' }, ...[['Total calls', s.totalCalls], ['Customers', s.customers], ['Calls today', s.today], ['Last 7 days', s.last7], ['Follow-ups pending', s.pendingFollowUps]].map(([k, v]) => h('div', { className: 'stat' }, h('b', { textContent: v }), txt(k, 'mute')))),
+      h('div', { className: 'mute', textContent: 'Last 7 days: ' + d.daily.map(x => x.day.slice(5) + ' = ' + x.calls).join(' · ') })),
+    h('div', { className: 'card' }, h('h2', { textContent: 'Export ' + d.user.name }), exportBar({ userId: u.id })),
+    h('div', { className: 'card' }, h('h2', { textContent: 'Recent calls' }), h('div', { style: 'overflow-x:auto' }, h('table', {}, h('tr', {}, ...['Customer', 'Phone', 'Date', 'Remark', 'Follow-up'].map(c => h('th', { textContent: c }))),
+      ...d.recent.map(c => h('tr', {}, ...[c.cn, c.ph, date(c.dt), c.rm, c.fu ? c.fu + (c.fd ? ' (done)' : '') : ''].map(v => h('td', { textContent: v }))))))), footer());
+}
+tok ? start() : login();
+</script></body></html>
