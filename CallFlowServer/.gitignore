@@ -1,9 +1,0 @@
-node_modules
-data/*.json
-data/*.tmp
-.env
-node_modules/
-.env
-.env.*
-!.env.example
-**/firebase-service-account.json
