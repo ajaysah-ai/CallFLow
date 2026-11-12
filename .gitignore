@@ -1,8 +1,0 @@
-build/
-.gradle/
-local.properties
-node_modules/
-.env
-.env.*
-!.env.example
-**/firebase-service-account.json
