@@ -4,6 +4,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const { xlsx, csv } = require('./xlsx');
 
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -35,6 +36,7 @@ function createApp(store, cfg) {
   const ADMIN_KEY = String(cfg.ADMIN_KEY || '');
   const SECRET = String(cfg.SESSION_SECRET || '');
   const TZ = Number(cfg.TZ_OFFSET_MIN || 330) * 60000;
+  const RETENTION = Number(cfg.RETENTION_DAYS || 365);
   if (ADMIN_KEY.length < 16) throw new Error('ADMIN_KEY must have at least 16 characters.');
   if (SECRET.length < 32) throw new Error('SESSION_SECRET must have at least 32 characters.');
 
@@ -79,11 +81,11 @@ function createApp(store, cfg) {
     }
     throw httpErr(500, 'Could not make a code.');
   }
-  async function createUser(name, leaderId, device) {
+  async function createUser(name, leaderId, device, consent) {
     const id = rid('u');
     const code = await newCode('CF', 'user', id);
     const u = {
-      id, name, code, leaderId: leaderId || '', status: 'active', created: iso(), joinedAt: iso(), lastCheck: '',
+      id, name, code, leaderId: leaderId || '', status: 'active', created: iso(), joinedAt: iso(), lastCheck: '', consent: { v: consent || '', at: consent ? iso() : '' },
       device: device ? { id: device.id, name: device.name || '', status: 'pending', requestedAt: iso(), approvedAt: '', lastSeen: iso() }
         : { id: '', name: '', status: 'none', requestedAt: '', approvedAt: '', lastSeen: '' },
     };
@@ -100,6 +102,7 @@ function createApp(store, cfg) {
   }
   const pub = u => ({
     id: u.id, name: u.name, code: u.code, leaderId: u.leaderId, status: u.status, joinedAt: u.joinedAt, lastCheck: u.lastCheck,
+    consent: (u.consent && u.consent.v) || '',
     device: { name: u.device.name, status: u.device.status, requestedAt: u.device.requestedAt, approvedAt: u.device.approvedAt, lastSeen: u.device.lastSeen, has: !!u.device.id },
   });
 
@@ -204,22 +207,25 @@ function createApp(store, cfg) {
     if (!/^CF-/.test(code) || !CODE_RE.test(code) || !dev) return closed('Invalid code or device.');
     const c = await store.get('codes/' + code);
     if (!c || c.type !== 'user') return closed('Invalid code.');
-    let mismatch = false;
-    const ok = await store.transaction('users/' + c.id, cur => {
-      if (!cur) return undefined;
+    // Read, change, write. Done one request at a time (no Firebase transaction: a transaction that
+    // returns "nothing" on its first call, when Firebase has nothing cached yet, is aborted and hid real users).
+    return locked(async () => {
+      const cur = await store.get('users/' + c.id);
+      if (!cur) return closed('Invalid code.');
       const d = cur.device || { id: '' };
-      if (!d.id) cur.device = { id: dev, name: clean(b.deviceName, 60), status: 'pending', requestedAt: iso(), approvedAt: '', lastSeen: iso() };
-      else if (d.id !== dev) { mismatch = true; return undefined; }
-      else cur.device.lastSeen = iso();
-      cur.lastCheck = iso();
-      return cur;
+      const up = { lastCheck: iso() };
+      if (!d.id) up.device = { id: dev, name: clean(b.deviceName, 60), status: 'pending', requestedAt: iso(), approvedAt: '', lastSeen: iso() };
+      else if (d.id !== dev) return closed('This code is already used on another phone.');
+      else up['device/lastSeen'] = iso();
+      const cv = clean(b.consent, 10);
+      if (cv && (!cur.consent || cur.consent.v !== cv)) up.consent = { v: cv, at: iso() };
+      await store.update('users/' + c.id, up);
+      const u = await store.get('users/' + c.id);
+      const acc = await access(u);
+      const out = { status: acc.status, message: acc.message, name: u.name };
+      if (acc.status === 'running') out.token = sign({ role: 'user', id: u.id, dev }, 24 * 3600e3);
+      return out;
     });
-    if (!ok) return closed(mismatch ? 'This code is already used on another phone.' : 'Invalid code.');
-    const u = await store.get('users/' + c.id);
-    const acc = await access(u);
-    const out = { status: acc.status, message: acc.message, name: u.name };
-    if (acc.status === 'running') out.token = sign({ role: 'user', id: u.id, dev }, 24 * 3600e3);
-    return out;
   } };
 
   H.join = { roles: null, fn: async b => {
@@ -238,7 +244,7 @@ function createApp(store, cfg) {
       const again = list.find(m => m.device && m.device.id === dev);
       if (again) { const acc = await access(again); return { ...acc, code: again.code, name: again.name }; }
       if (list.filter(m => m.status === 'active').length >= Number(l.userLimit)) return closed('This team is full. Ask your team leader to raise the user limit.');
-      const u = await createUser(name, c.id, { id: dev, name: clean(b.deviceName, 60) });
+      const u = await createUser(name, c.id, { id: dev, name: clean(b.deviceName, 60) }, clean(b.consent, 10));
       return { status: 'pending', message: 'Joined. Waiting for approval.', code: u.code, name: u.name };
     });
   } };
@@ -263,6 +269,15 @@ function createApp(store, cfg) {
     if (saved) await store.update('calls/' + ctx.id, up);
     return { status: 'running', message: acc.message, saved };
   } };
+
+  // A user deletes their own account and all their call records (withdraws consent).
+  H.deleteMe = { roles: ['user'], fn: async (b, ctx) => locked(async () => {
+    const u = ctx.user;
+    await store.remove('calls/' + u.id);
+    await store.remove('codes/' + u.code);
+    await store.remove('users/' + u.id);
+    return { ok: true };
+  }) };
 
   // ---- admin: team leaders ----
   H.listLeaders = { roles: ['admin'], fn: async () => {
@@ -448,6 +463,43 @@ function createApp(store, cfg) {
       type: fmt === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv; charset=utf-8' } };
   } };
 
+  // Retention: delete call records older than `days` days. Runs daily from server.js.
+  async function purgeOld(days) {
+    const cutoff = Date.now() - days * DAY;
+    let n = 0;
+    for (const [uid, recs] of Object.entries((await store.get('calls')) || {})) {
+      const del = {};
+      for (const [id, c] of Object.entries(recs || {})) if ((c.dt || 0) < cutoff) del[id] = null;
+      if (Object.keys(del).length) { await store.update('calls/' + uid, del); n += Object.keys(del).length; }
+    }
+    return n;
+  }
+
+  /* ---------- legal pages (same files the app shows) ---------- */
+  const LEGAL_DIR = path.join(__dirname, 'public', 'legal');
+  const readLegal = f => fs.readFileSync(path.join(LEGAL_DIR, f), 'utf8');
+  const legalDocs = () => JSON.parse(readLegal('index.json')).docs;
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  function mdToHtml(md) {
+    const inl = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    let out = '';
+    let list = false;
+    for (const raw of md.split(/\r?\n/)) {
+      const line = raw.trimEnd();
+      if (line.startsWith('- ')) { if (!list) { out += '<ul>'; list = true; } out += '<li>' + inl(line.slice(2)) + '</li>'; continue; }
+      if (list) { out += '</ul>'; list = false; }
+      if (!line.trim()) continue;
+      if (line.startsWith('## ')) out += '<h2>' + inl(line.slice(3)) + '</h2>';
+      else if (line.startsWith('# ')) out += '<h1>' + inl(line.slice(2)) + '</h1>';
+      else out += '<p>' + inl(line) + '</p>';
+    }
+    return out + (list ? '</ul>' : '');
+  }
+  function legalPage(title, inner) {
+    const nav = legalDocs().map(d => `<a href="/legal/${d.slug}">${esc(d.title)}</a>`).join(' · ');
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>:root{color-scheme:dark}body{margin:0;background:#0a0a0a;color:#f2f5e8;font:16px/1.6 system-ui,sans-serif}main{max-width:760px;margin:0 auto;padding:16px}h1,h2{color:#c6f432}a{color:#ffd60a}nav{font-size:14px;margin:12px 0}li{margin:4px 0}footer{color:#8a9a5b;font-size:12px;margin:30px 0;text-align:center}</style></head><body><main>${inner}<nav>${nav}</nav><footer>© 2026 CallFlow AI · All rights reserved by Ajay Sah</footer></main></body></html>`;
+  }
+
   /* ---------- web ---------- */
   const app = express();
   app.set('trust proxy', 1);
@@ -457,7 +509,15 @@ function createApp(store, cfg) {
     next();
   });
   app.use(express.json({ limit: '400kb' }));
-  app.use(express.static(path.join(__dirname, 'public')));
+  app.use(express.static(path.join(__dirname, 'public'), { redirect: false }));
+  app.get('/legal', (req, res) => res.type('html').send(legalPage('Legal', '<h1>CallFlow AI: legal documents</h1><ul>' + legalDocs().map(d => `<li><a href="/legal/${d.slug}">${esc(d.title)}</a></li>`).join('') + '</ul>')));
+  app.get('/legal/:slug', (req, res) => {
+    const d = legalDocs().find(x => x.slug === req.params.slug);
+    if (!d) return res.status(404).type('html').send(legalPage('Not found', '<h1>Page not found</h1>'));
+    const set = { ...JSON.parse(readLegal('settings.json')), retentionDays: String(RETENTION) };
+    const md = readLegal(d.slug + '.md').replace(/\{\{(\w+)\}\}/g, (m, k) => (set[k] !== undefined ? set[k] : m));
+    return res.type('html').send(legalPage(d.title, mdToHtml(md)));
+  });
   app.get('/health', (req, res) => res.json({ ok: true, service: 'CallFlow AI server', version: 3 }));
   app.get('/api/subscription', (req, res) => res.json({ ok: true, version: 3 }));
 
@@ -499,6 +559,7 @@ function createApp(store, cfg) {
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
+  app.purgeOld = purgeOld;
   return app;
 }
 

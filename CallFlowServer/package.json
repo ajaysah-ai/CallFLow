@@ -3,7 +3,18 @@
   "version": "3.0.0",
   "private": true,
   "main": "server.js",
-  "scripts": { "start": "node server.js", "dev": "node --watch server.js", "test": "node test.js" },
-  "engines": { "node": ">=20" },
-  "dependencies": { "dotenv": "^18.0.10", "express": "^4.19.2", "firebase-admin": "^13.0.0" }
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test.js",
+    "test:dashboard": "npm i jsdom --no-save && node test-dashboard.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "express": "^4.19.2",
+    "firebase-admin": "^13.0.0"
+  }
 }

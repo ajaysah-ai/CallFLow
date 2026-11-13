@@ -2,14 +2,38 @@
 const clone = v => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
 const parts = p => p.split('/').filter(Boolean);
 
-function memoryStore() {
+// firebaseLike = true copies the Realtime Database rules that cause real bugs:
+//  - a transaction's first call gets null (nothing cached) and returning undefined then ABORTS it
+//  - undefined values and keys with . $ # [ ] / are rejected
+//  - null values and empty objects are not stored
+function memoryStore(opts = {}) {
+  const strict = !!opts.firebaseLike;
   const root = {};
   const getAt = p => {
     let n = root;
     for (const k of parts(p)) { if (n == null || typeof n !== 'object') return null; n = n[k]; }
     return n === undefined ? null : n;
   };
+  const check = v => {
+    if (v === undefined) throw new Error('Firebase: undefined is not allowed');
+    if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        if (!k || /[.$#[\]/]/.test(k)) throw new Error('Firebase: bad key "' + k + '"');
+        check(x);
+      }
+    }
+  };
+  const prune = v => {
+    if (v && typeof v === 'object') {
+      for (const k of Object.keys(v)) {
+        v[k] = prune(v[k]);
+        if (v[k] === null || (typeof v[k] === 'object' && !Object.keys(v[k]).length)) delete v[k];
+      }
+    }
+    return v;
+  };
   const setAt = (p, val) => {
+    if (strict && val !== null) { check(val); val = prune(clone(val)); if (val && typeof val === 'object' && !Object.keys(val).length) val = null; }
     const ks = parts(p);
     let n = root;
     for (const k of ks.slice(0, -1)) { if (n[k] == null || typeof n[k] !== 'object') n[k] = {}; n = n[k]; }
@@ -22,7 +46,10 @@ function memoryStore() {
     async update(p, obj) { for (const [k, v] of Object.entries(obj)) setAt(p + '/' + k, v); },
     async remove(p) { setAt(p, null); },
     async transaction(p, fn) {
-      const next = fn(clone(getAt(p)));
+      let next = fn(null); // first call: nothing cached
+      if (strict && next === undefined) return false;
+      const cur = getAt(p);
+      if (strict) { if (cur !== null) next = fn(clone(cur)); } else next = fn(clone(cur));
       if (next === undefined) return false;
       setAt(p, next);
       return true;

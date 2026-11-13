@@ -9,8 +9,8 @@ android {
         applicationId = "com.callflow.ai"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
     signingConfigs {
         create("release") {
@@ -28,6 +28,12 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    sourceSets {
+        getByName("main") {
+            // The legal documents live in the server folder so the app and the website show the same text.
+            assets.srcDir(rootProject.file("CallFlowServer/public/legal"))
+        }
+    }
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")

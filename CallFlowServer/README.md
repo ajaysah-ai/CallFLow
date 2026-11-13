@@ -9,6 +9,10 @@ One endpoint: `POST /api/subscription` with `{ "action": "...", ... }`. Dashboar
 | admin | `listLeaders`, `createLeader {name, userLimit, plan, days}`, `updateLeader {leaderId, status, userLimit, expiresAt, plan, name, message}`, `renewLeader {leaderId, days}`, `newCode {leaderId, which}`, `deleteLeader {leaderId, confirm:true}`, `listUsers {leaderId?}` |
 | admin + leader | `addUser`, `setAccess {userId, access}`, `setDevice {userId, device: approve/revoke/reset}`, `removeUser`, `userDashboard {userId}`, `report {type: calls/followups/performance/team, format: csv/xlsx, userId?, leaderId?}` |
 | leader | `teamInfo`, `teamUsers` |
+| user | `deleteMe` (deletes their account and all their call records) |
+
+Legal pages: `/legal` and `/legal/privacy`, `/legal/terms`, ... (files in `public/legal`, edit `settings.json`).
+Retention: call records older than `RETENTION_DAYS` are deleted once a day.
 
 Environment: `ADMIN_KEY` (16+), `SESSION_SECRET` (32+), `FIREBASE_DATABASE_URL`, `FIREBASE_SERVICE_ACCOUNT_BASE64`, optional `TZ_OFFSET_MIN` (default 330 = India).
 Run one server instance only (the user-limit lock lives in memory).

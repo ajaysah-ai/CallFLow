@@ -4,7 +4,7 @@ const { createApp } = require('./app');
 const { memoryStore } = require('./store');
 
 const ADMIN_KEY = 'admin-key-1234567890';
-const app = createApp(memoryStore(), { ADMIN_KEY, SESSION_SECRET: 'x'.repeat(40) });
+const app = createApp(memoryStore({ firebaseLike: true }), { ADMIN_KEY, SESSION_SECRET: 'x'.repeat(40) });
 const server = app.listen(0);
 const url = `http://127.0.0.1:${server.address().port}/api/subscription`;
 let ip = 0;
@@ -123,6 +123,31 @@ const t0 = Date.now();
   let limited = 0;
   for (let i = 0; i < 25; i++) { const x = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '9.9.9.9' }, body: JSON.stringify({ action: 'adminLogin', key: 'no' }) }); if (x.status === 429) limited++; }
   assert.ok(limited > 0, 'login attempts are rate limited');
+  // consent, self-deletion, retention, legal pages
+  const cu = ok(await call('addUser', { name: 'Consent' }, admin)).user;
+  ok(await call('activate', { code: cu.code, deviceId: 'DEV-C', consent: '1.0' }));
+  assert.strictEqual(ok(await call('userDashboard', { userId: cu.id }, admin)).user.consent, '1.0', 'consent saved');
+  ok(await call('setDevice', { userId: cu.id, device: 'approve' }, admin));
+  const tc = ok(await call('activate', { code: cu.code, deviceId: 'DEV-C' })).token;
+  const old = Date.now() - 400 * 86400000;
+  ok(await call('sync', { records: [{ id: 'old1', cn: 'Old', ph: 'XXXXXX0000', at: 1, rm: 'old', dt: old }, { id: 'new1', cn: 'New', ph: 'XXXXXX1111', at: 1, rm: 'new', dt: Date.now() }] }, tc));
+  assert.strictEqual(await app.purgeOld(365), 1, 'only the old record is purged');
+  assert.strictEqual(ok(await call('userDashboard', { userId: cu.id }, admin)).stats.totalCalls, 1);
+  assert.strictEqual((await call('deleteMe', {}, admin)).status, 401, 'deleteMe is for users only');
+  ok(await call('deleteMe', {}, tc));
+  assert.strictEqual(ok(await call('activate', { code: cu.code, deviceId: 'DEV-C' })).status, 'closed', 'code gone after deleteMe');
+  assert.strictEqual((await call('userDashboard', { userId: cu.id }, admin)).status, 404);
+  const base = url.replace('/api/subscription', '');
+  const pv = await (await fetch(base + '/legal/privacy')).text();
+  assert.ok(pv.includes('Privacy Policy') && !pv.includes('{{') && pv.includes('365 days'), 'legal page filled in');
+  assert.strictEqual((await fetch(base + '/legal/nope')).status, 404);
+  assert.strictEqual((await fetch(base + '/legal/..%2f..%2fapp.js')).status, 404);
+  const idx = await (await fetch(base + '/legal')).text();
+  assert.ok((idx.match(/href="\/legal\//g) || []).length >= 10, 'index lists all 10 documents');
+  for (const d of ['privacy','terms','about','data-disclosure','consent','deletion','retention','security','eula','support']) {
+    const r = await fetch(base + '/legal/' + d); const h = await r.text();
+    assert.ok(r.status === 200 && !h.includes('{{') && h.includes('<h1>'), d);
+  }
   console.log('ALL BACKEND CHECKS PASSED');
   server.close(); process.exit(0);
 })().catch(e => { console.error('FAILED:', e.message); process.exit(1); });

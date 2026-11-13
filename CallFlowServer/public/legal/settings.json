@@ -1,0 +1,14 @@
+{
+  "appName": "CallFlow AI",
+  "owner": "Ajay Sah",
+  "email": "ajay.sah.aieng@outlook.com",
+  "phone": "+91-8969594358",
+  "address": "Jamshedpur, Jharkhand, India",
+  "website": "https://callflowserver.onrender.com",
+  "jurisdiction": "Jamshedpur, Jharkhand, India",
+  "effective": "13 November 2026",
+  "retentionDays": "365",
+  "deletionDays": "30",
+  "supportHours": "Monday to Saturday, 10:00 to 18:00 IST",
+  "responseTime": "2 working days"
+}

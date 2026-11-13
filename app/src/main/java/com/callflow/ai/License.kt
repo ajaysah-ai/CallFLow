@@ -75,8 +75,8 @@ object License {
     private fun post(body: JSONObject, token: String? = null): JSONObject? = try {
         val h = URL(Config.SERVER_URL).openConnection() as HttpURLConnection
         h.requestMethod = "POST"
-        h.connectTimeout = 10000
-        h.readTimeout = 20000
+        h.connectTimeout = 30000
+        h.readTimeout = 60000
         h.doOutput = true
         h.setRequestProperty("Content-Type", "application/json")
         if (token != null) h.setRequestProperty("Authorization", "Bearer $token")
@@ -92,6 +92,8 @@ object License {
         if (st == "running") { val n = System.currentTimeMillis(); e.putLong("lastOk", n).putLong("maxT", n) }
         e.apply()
     }
+
+    private fun consent(app: Context): String = app.getSharedPreferences("consent", Context.MODE_PRIVATE).getString("v", "") ?: ""
 
     private fun mask(p: String) = if (p.length <= 4) p else "X".repeat(p.length - 4) + p.takeLast(4)
 
@@ -130,7 +132,7 @@ object License {
         val batch = snapshot(app)
         exec.execute {
             var res: String? = null
-            val r = post(JSONObject().put("action", "activate").put("code", useCode).put("deviceId", deviceId(app)).put("deviceName", Build.MODEL))
+            val r = post(JSONObject().put("action", "activate").put("code", useCode).put("deviceId", deviceId(app)).put("deviceName", Build.MODEL).put("consent", consent(app)))
             if (r != null) {
                 val st = r.optString("status", "closed")
                 lastMsg = r.optString("message", "")
@@ -148,13 +150,30 @@ object License {
         exec.execute {
             var res: String? = null
             val r = post(JSONObject().put("action", "join").put("inviteCode", invite).put("name", name)
-                .put("deviceId", deviceId(app)).put("deviceName", Build.MODEL))
+                .put("deviceId", deviceId(app)).put("deviceName", Build.MODEL).put("consent", consent(app)))
             if (r != null) {
                 val st = r.optString("status", "closed")
                 lastMsg = r.optString("message", "")
                 val code = r.optString("code", "")
                 if (st != "closed" && code.isNotEmpty()) remember(app, r, code)
                 res = st
+            }
+            main.post { done(res) }
+        }
+    }
+
+    /** Deletes this user's account and all their call records on the server (withdraws consent). "deleted" or null. */
+    fun deleteMe(c: Context, done: (String?) -> Unit) {
+        val app = c.applicationContext
+        val myCode = code(app)
+        exec.execute {
+            var res: String? = null
+            val a = post(JSONObject().put("action", "activate").put("code", myCode).put("deviceId", deviceId(app))
+                .put("deviceName", Build.MODEL).put("consent", consent(app)))
+            val token = a?.optString("token", "") ?: ""
+            if (token.isNotEmpty()) {
+                val r = post(JSONObject().put("action", "deleteMe"), token)
+                if (r != null && r.optBoolean("ok")) res = "deleted"
             }
             main.post { done(res) }
         }

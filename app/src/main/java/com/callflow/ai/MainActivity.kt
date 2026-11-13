@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
@@ -100,6 +101,21 @@ class MainActivity : AppCompatActivity() {
     private var actName = ""
     private var actInvite = ""
     private var joinMode = false
+    private var docView: String? = null
+    private var consentChecked = false
+    private val consentV = "1.0"
+    // After a call we wait until the phone is no longer in a call, then open the remark screen.
+    private val callWatch = object : Runnable {
+        override fun run() {
+            val s = Store.sess
+            if (!Store.pending || s == null) { Store.pending = false; return }
+            if (inCall()) { handler.postDelayed(this, 2000); return }
+            Store.pending = false
+            if (s.status == "active" && s.stage == "call") { s.stage = "remark"; tab = 1 }
+            Store.save(this@MainActivity)
+            render()
+        }
+    }
     private val poll = object : Runnable {
         override fun run() {
             if (Config.LICENSE_ENABLED && License.state(this@MainActivity) != "ok") { runCheck(true); handler.postDelayed(this, 15000) }
@@ -142,7 +158,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         Store.load(this)
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(7)
+        if (Store.pending) { handler.removeCallbacks(callWatch); handler.postDelayed(callWatch, 1200) }
         if (intent.getBooleanExtra("ended", false)) {
             intent.removeExtra("ended")
             tab = 1
@@ -212,6 +228,89 @@ class MainActivity : AppCompatActivity() {
     }
 
     /* ---------- screens ---------- */
+    /* ---------- consent and legal documents ---------- */
+    private fun inCall(): Boolean = (getSystemService(Context.AUDIO_SERVICE) as AudioManager).mode == AudioManager.MODE_IN_CALL
+
+    private fun consentOk(): Boolean = getSharedPreferences("consent", MODE_PRIVATE).getString("v", "") == consentV
+
+    private fun addFooter() {
+        val ft = tv("© 2026 CallFlow AI · All rights reserved by Ajay Sah", 12f, false, 0xFF8A9A5B.toInt())
+        ft.gravity = Gravity.CENTER
+        body.put(ft, 20)
+    }
+
+    private fun consentScreen() {
+        body.removeAllViews()
+        tabs.removeAllViews()
+        val c = section("Before you start")
+        c.put(tv("CallFlow AI helps you call customers from your own list, save remarks and follow-ups, and export them.", 14f), 6)
+        c.put(tv("By continuing you agree that:", 14f, true), 10)
+        listOf(
+            "Customer lists and full records stay on your phone.",
+            "If your team uses a subscription code, we store your name, a device ID and your call records (customer name, phone with only the last 4 digits visible, remark, follow-up date, time). Your Team Leader and the Admin can see them.",
+            "We never record calls and never read your contacts, SMS or location.",
+            "You will call only people you may lawfully call, and follow TRAI and Do Not Disturb rules.",
+            "You can delete everything at any time from the More tab."
+        ).forEach { c.put(tv("• $it", 13f), 4) }
+        c.put(tv("Read the full documents:", 14f, true), 12)
+        Legal.docs(this).forEach { d -> c.put(btn(d.title, false) { docView = d.slug; render() }, 4) }
+        val cb = CheckBox(this).apply {
+            text = "I have read and I agree to the Terms, EULA, Privacy Policy, Data Disclosure and Consent Declaration."
+            isChecked = consentChecked
+            setOnCheckedChangeListener { _, v -> consentChecked = v }
+        }
+        c.put(cb, 12)
+        c.put(btn("Agree and continue") {
+            if (!consentChecked) toast("Please tick the box first")
+            else {
+                getSharedPreferences("consent", MODE_PRIVATE).edit().putString("v", consentV).putLong("at", System.currentTimeMillis()).apply()
+                render()
+            }
+        }, 12)
+        c.put(btn("I do not agree", false) { finishAffinity() })
+        addFooter()
+    }
+
+    private fun renderDoc(slug: String) {
+        body.removeAllViews()
+        tabs.removeAllViews()
+        val c = section()
+        c.put(btn("Back", false) { docView = null; render() }, 0)
+        Legal.text(this, slug).lines().forEach { raw ->
+            val l = raw.trimEnd()
+            when {
+                l.isBlank() -> {}
+                l.startsWith("## ") -> c.put(tv(l.drop(3), 17f, true, 0xFFC6F432.toInt()), 16)
+                l.startsWith("# ") -> c.put(tv(l.drop(2), 22f, true, 0xFFC6F432.toInt()), 12)
+                l.startsWith("- ") -> c.put(tv("• " + l.drop(2).replace("**", ""), 14f), 4)
+                else -> c.put(tv(l.replace("**", ""), 14f), 8)
+            }
+        }
+        c.put(btn("Back", false) { docView = null; render() }, 16)
+        addFooter()
+        scroll.scrollTo(0, 0)
+    }
+
+    private fun deleteEverything() {
+        AlertDialog.Builder(this).setTitle("Delete everything?")
+            .setMessage("This deletes your records on this phone and on our server, ends your access and withdraws your consent. It cannot be undone.")
+            .setPositiveButton("Delete") { _, _ ->
+                val wipe = {
+                    Store.cust.clear(); Store.hist.clear(); Store.cols.clear(); Store.batches.clear(); Store.calcs.clear()
+                    Store.sess = null; Store.pending = false
+                    Store.save(this)
+                    License.clear(this)
+                    getSharedPreferences("consent", MODE_PRIVATE).edit().clear().apply()
+                    consentChecked = false
+                    toast("Everything was deleted")
+                    render()
+                }
+                if (!Config.LICENSE_ENABLED || License.code(this).isEmpty()) wipe()
+                else License.deleteMe(this) { res -> if (res == "deleted") wipe() else toast("Could not reach the server. Connect to the internet and try again.") }
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
     /* ---------- subscription code ---------- */
     private fun licenseOk(): Boolean {
         if (!Config.LICENSE_ENABLED) return true
@@ -310,6 +409,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun render() {
+        val dv = docView
+        if (dv != null) { renderDoc(dv); return }
+        if (!consentOk()) { consentScreen(); return }
         if (!licenseOk()) return
         body.removeAllViews()
         tabs.removeAllViews()
@@ -410,17 +512,10 @@ class MainActivity : AppCompatActivity() {
             im.put(btn("Cancel", false) { preview = null; render() })
         }
 
-        val pm = section("Auto-reopen after call")
-        val hasPhone = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-        val hasNotif = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        val hasOver = Settings.canDrawOverlays(this)
+        val pm = section("Calling permission")
         val hasCall = checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
-        pm.put(tv("Allow all four. They let the app place calls and come back when a call ends:", 14f), 0)
-        pm.put(btn((if (hasPhone) "✓ " else "") + "Allow phone state", false) { requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), 1) }, 10)
-        pm.put(btn((if (hasNotif) "✓ " else "") + "Allow notifications", false) { if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2) })
-        pm.put(btn((if (hasOver) "✓ " else "") + "Allow display over other apps", false) { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) })
-        pm.put(btn((if (hasCall) "✓ " else "") + "Allow calling", false) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 3) })
-        pm.put(tv("On Realme also set: Settings > Battery > this app > Unrestricted, and allow Auto-start.", 13f), 8)
+        pm.put(tv("Auto-call only needs the Calling permission. The app does not read your contacts, SMS or location, and it never records calls.", 14f), 0)
+        pm.put(btn((if (hasCall) "✓ " else "") + "Allow calling", false) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 3) }, 10)
 
         val cb = CheckBox(this).apply {
             text = "Allow saving a call with no remark"
@@ -844,14 +939,19 @@ class MainActivity : AppCompatActivity() {
             val cu = Store.byId(h.cid)
             hc.put(tv("${cu?.name ?: ""} · ${cu?.ph ?: ""}\n${fmtDt(h.dt)} · Attempt ${h.n}" + (if (h.fu.isNotEmpty()) " · Follow-up ${h.fu}" else "") + "\n${h.rm}", 14f), 10)
         }
-        section().put(btn("Delete all data", false) {
+        val lg = section("About and legal")
+        Legal.docs(this).forEach { d -> lg.put(btn(d.title, false) { docView = d.slug; render() }, 6) }
+        lg.put(tv("CallFlow AI version 1.4 · © 2026 Ajay Sah", 12f), 12)
+        val dz = section("Delete or withdraw")
+        dz.put(btn("Delete everything (phone and server)", false) { deleteEverything() }, 0)
+        dz.put(btn("Delete all data", false) {
             AlertDialog.Builder(this).setMessage("Delete all customers and history? This cannot be undone.")
                 .setPositiveButton("Delete") { _, _ ->
                     Store.cust.clear(); Store.hist.clear(); Store.cols.clear(); Store.sess = null; Store.pending = false
                     Store.save(this); render()
                 }
                 .setNegativeButton("Cancel", null).show()
-        }, 0)
+        }, 8)
     }
 
     private fun startExport(kind: String, fmt: String) {

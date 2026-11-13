@@ -24,7 +24,7 @@ let tok = sessionStorage.getItem('t') || '', role = sessionStorage.getItem('r') 
 const app = document.getElementById('app');
 const h = (tag, props, ...kids) => { const e = document.createElement(tag); Object.assign(e, props || {}); kids.flat().forEach(k => e.append(k)); return e; };
 const txt = (t, cls) => h('div', { className: cls || '', textContent: t });
-const btn = (t, f, cls) => h('button', { textContent: t, className: cls || '', onclick: f });
+const btn = (t, f, cls) => h('button', { textContent: t, className: cls || '', onclick: async () => { try { await f(); } catch (e) { /* the error is already shown to the user */ } } });
 const date = s => s ? new Date(s).toLocaleString() : '-';
 async function api(action, body, raw) {
   const r = await fetch('/api/subscription', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: JSON.stringify({ action, ...(body || {}) }) });

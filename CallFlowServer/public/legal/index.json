@@ -1,0 +1,12 @@
+{ "docs": [
+  { "slug": "privacy", "title": "Privacy Policy" },
+  { "slug": "terms", "title": "Terms and Conditions" },
+  { "slug": "about", "title": "About Us" },
+  { "slug": "data-disclosure", "title": "Data Collection and Usage Disclosure" },
+  { "slug": "consent", "title": "User Consent Declaration" },
+  { "slug": "deletion", "title": "Data Deletion Policy" },
+  { "slug": "retention", "title": "Data Retention Policy" },
+  { "slug": "security", "title": "Security and Data Protection Policy" },
+  { "slug": "eula", "title": "End User License Agreement (EULA)" },
+  { "slug": "support", "title": "Contact and Support Policy" }
+] }
