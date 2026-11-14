@@ -97,6 +97,7 @@ class MainActivity : AppCompatActivity() {
     private var eNote = "Default: loan ₹65,000 + 10% (₹6,500) = ₹71,500"
     private var eMsg = ""
     private var eRes: DoubleArray? = null
+    private var eAutoFor = ""
     private var actCode = ""
     private var actName = ""
     private var actInvite = ""
@@ -690,7 +691,7 @@ class MainActivity : AppCompatActivity() {
             a.put(btn("Call finished", false) { Store.pending = false; s.stage = "remark"; Store.save(this); render() }, 10)
             if (ln > 0) a.put(btn("Check EMI for this customer", false) {
                 eAmt = (ln * 1.1).roundToLong().toString()
-                eSolve = 3; eRes = null; eMsg = ""
+                eSolve = 3; eRes = null; eMsg = ""; eAutoFor = cu.id; eSched = emptyList()
                 eNote = "${cu.name}: loan ${inr(ln)} + 10% = ${inr(ln * 1.1)}"
                 tab = 2; render()
             })
@@ -805,9 +806,34 @@ class MainActivity : AppCompatActivity() {
         return row
     }
 
+    /** The customer being called right now (null when there is no running session). */
+    private fun currentCust(): Cust? {
+        val s = Store.sess ?: return null
+        if (s.status == "done" || s.i >= s.queue.size) return null
+        return Store.byId(s.queue[s.i])
+    }
+
+    /** Puts the customer's loan + 10% into the Amount box. */
+    private fun applyLoan(cu: Cust) {
+        val ln = cu.loan()
+        eAmt = (ln * 1.1).roundToLong().toString()
+        eNote = "${cu.name}: loan ${inr(ln)} + 10% = ${inr(ln * 1.1)}"
+        eAutoFor = cu.id
+        eRes = null
+        eSched = emptyList()
+        eMsg = ""
+    }
+
     private fun emiTab() {
+        // Default amount = the current customer's loan + 10%. It changes by itself when the next customer comes.
+        val cur = currentCust()
+        if (cur != null && cur.loan() > 0 && eAutoFor != cur.id && eSolve != 0) applyLoan(cur)
         val c = section("EMI Calculator")
-        if (eNote.isNotEmpty()) c.put(tv(eNote, 14f, true, 0xFFFFD60A.toInt()), 0)
+        if (cur != null && cur.loan() > 0) {
+            c.put(tv("Current customer: ${cur.name}", 15f, true), 0)
+            c.put(btn("Use this customer's loan", false) { applyLoan(cur); render() }, 4)
+        }
+        if (eNote.isNotEmpty()) c.put(tv(eNote, 14f, true, 0xFFFFD60A.toInt()), 8)
         c.put(tv("Total loan = loan amount + 10%. Interest is on the reducing balance.", 13f), 4)
         c.put(tv("Tap the circle of the box you want to find. Fill the other boxes.", 13f), 4)
         emiRow(c, 0, "Amount (₹)", eAmt) { eAmt = it }
@@ -818,7 +844,7 @@ class MainActivity : AppCompatActivity() {
         c.put(field("Processing fee (%)", eFee, true) { eFee = it }, 10)
         addRow(c,
             btn("Reset", false) {
-                eAmt = "71500"; eRate = "30.5"; ePer = "12"; eEmi = ""; eFee = "4.13"; eYears = false; eSolve = 3
+                eAmt = "71500"; eRate = "30.5"; ePer = "12"; eEmi = ""; eFee = "4.13"; eYears = false; eSolve = 3; eAutoFor = ""
                 eNote = "Default: loan ₹65,000 + 10% (₹6,500) = ₹71,500"; eMsg = ""; eRes = null; eSched = emptyList(); render()
             },
             btn("Calculate") { calcEmi() })
@@ -941,7 +967,7 @@ class MainActivity : AppCompatActivity() {
         }
         val lg = section("About and legal")
         Legal.docs(this).forEach { d -> lg.put(btn(d.title, false) { docView = d.slug; render() }, 6) }
-        lg.put(tv("CallFlow AI version 1.4 · © 2026 Ajay Sah", 12f), 12)
+        lg.put(tv("CallFlow AI version 1.5 · © 2026 Ajay Sah", 12f), 12)
         val dz = section("Delete or withdraw")
         dz.put(btn("Delete everything (phone and server)", false) { deleteEverything() }, 0)
         dz.put(btn("Delete all data", false) {
